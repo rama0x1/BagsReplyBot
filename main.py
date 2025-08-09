@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 import os
 import time
 import re
@@ -9,8 +10,8 @@ from datetime import datetime
 # --- Config from environment ---
 TW_BEARER = os.environ.get("TWITTER_BEARER_TOKEN", "").strip()
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
-TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "").strip()  # numeric chat id
-LAUNCH_ACCOUNT = os.environ.get("LAUNCH_ACCOUNT", "launchonbags").lstrip("@")
+TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "").strip()
+LAUNCH_ACCOUNT = os.environ.get("LAUNCH_ACCOUNT", "LaunchOnBags").lstrip("@")
 POLL_INTERVAL = int(os.environ.get("POLL_INTERVAL", 30))
 
 if not TW_BEARER or not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
@@ -31,10 +32,6 @@ CREATE TABLE IF NOT EXISTS tracked_tweets (
     contract TEXT,
     created_at TEXT,
     notified INTEGER DEFAULT 0
-);
-CREATE TABLE IF NOT EXISTS metadata (
-    k TEXT PRIMARY KEY,
-    v TEXT
 );
 """
 
@@ -100,7 +97,7 @@ def get_user_tweets(user_id, max_results=5):
         return []
     return j.get("data", [])
 
-def get_tweet_retweeters(tweet_id, max_results=100):
+def get_tweet_retweeters(tweet_id):
     j = tw_get(f"/tweets/{tweet_id}/retweeted_by", params={"user.fields":"id,username"})
     if not j:
         return []
@@ -159,12 +156,17 @@ def check_quote_via_user_tweets(beneficiary_id, tweet_id):
 # --- Main loop ---
 def main():
     init_db()
-    logging.info("Starting monitor for @%s", LAUNCH_ACCOUNT)
+
+    # Cache launch account ID once
     launch_user = get_user_by_username(LAUNCH_ACCOUNT)
     if not launch_user:
-        logging.error("Cannot find launch account %s", LAUNCH_ACCOUNT)
+        logging.error("Cannot find launch account @%s", LAUNCH_ACCOUNT)
         return
     launch_id = launch_user["id"]
+    logging.info("Launch account @%s has ID %s", LAUNCH_ACCOUNT, launch_id)
+
+    beneficiary_cache = {}  # username -> (id, followers, bio)
+
     while True:
         try:
             tweets = get_user_tweets(launch_id, max_results=5)
@@ -174,13 +176,21 @@ def main():
                     text = t.get("text","")
                     beneficiary_username, contract = extract_beneficiary_and_contract(text)
                     if beneficiary_username and contract:
-                        user = get_user_by_username(beneficiary_username)
-                        if user:
-                            beneficiary_id = user["id"]
-                            db_insert_tracked(tid, beneficiary_username, beneficiary_id, contract)
-                            logging.info("Tracking tweet %s -> beneficiary @%s contract %s", tid, beneficiary_username, contract)
-                        else:
-                            logging.warning("Could not resolve beneficiary username @%s", beneficiary_username)
+                        if beneficiary_username not in beneficiary_cache:
+                            u = get_user_by_username(beneficiary_username)
+                            if u:
+                                beneficiary_cache[beneficiary_username] = (
+                                    u["id"],
+                                    u.get("public_metrics", {}).get("followers_count", "?"),
+                                    u.get("description", "")
+                                )
+                            else:
+                                logging.warning("Could not resolve beneficiary @%s", beneficiary_username)
+                                continue
+                        beneficiary_id = beneficiary_cache[beneficiary_username][0]
+                        db_insert_tracked(tid, beneficiary_username, beneficiary_id, contract)
+                        logging.info("Tracking tweet %s -> beneficiary @%s contract %s", tid, beneficiary_username, contract)
+
             rows = db_get_unnotified()
             for tweet_id, beneficiary_username, beneficiary_id, contract in rows:
                 action = None
@@ -189,11 +199,9 @@ def main():
                 elif check_reply(tweet_id, beneficiary_username):
                     action = "reply"
                 elif check_quote_via_user_tweets(beneficiary_id, tweet_id):
-                    action = "quote/retweeted"
+                    action = "quote"
                 if action:
-                    u = get_user_by_username(beneficiary_username)
-                    followers = u.get("public_metrics",{}).get("followers_count","?") if u else "?"
-                    bio = u.get("description","") if u else ""
+                    _, followers, bio = beneficiary_cache.get(beneficiary_username, ("?", "?", ""))
                     msg = (f"🚨 <b>Beneficiary action detected</b>\n\n"
                            f"User: @{beneficiary_username}\n"
                            f"Followers: {followers}\n"
@@ -204,7 +212,9 @@ def main():
                     send_telegram(msg)
                     db_mark_notified(tweet_id)
                     logging.info("Notified for tweet %s action %s", tweet_id, action)
+
             time.sleep(POLL_INTERVAL)
+
         except Exception as e:
             logging.exception("Main loop error: %s", e)
             time.sleep(10)
