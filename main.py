@@ -10,7 +10,7 @@ from datetime import datetime
 TW_BEARER = os.environ.get("TWITTER_BEARER_TOKEN", "").strip()
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "").strip()  # numeric chat id
-LAUNCH_ACCOUNT = os.environ.get("LAUNCH_ACCOUNT", "launchwithbags").lstrip("@")
+LAUNCH_ACCOUNT = os.environ.get("LAUNCH_ACCOUNT", "launchonbags").lstrip("@")
 POLL_INTERVAL = int(os.environ.get("POLL_INTERVAL", 30))
 
 if not TW_BEARER or not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
