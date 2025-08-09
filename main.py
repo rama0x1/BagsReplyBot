@@ -160,8 +160,12 @@ def main():
     # Cache launch account ID once
     launch_user = get_user_by_username(LAUNCH_ACCOUNT)
     if not launch_user:
+        import requests
+        resp = requests.get(f"https://api.twitter.com/2/users/by/username/{LAUNCH_ACCOUNT}", headers=HEADERS)
         logging.error("Cannot find launch account @%s", LAUNCH_ACCOUNT)
+        logging.error("Raw Twitter API response: %s %s", resp.status_code, resp.text)
         return
+
     launch_id = launch_user["id"]
     logging.info("Launch account @%s has ID %s", LAUNCH_ACCOUNT, launch_id)
 
